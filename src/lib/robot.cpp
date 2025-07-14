@@ -8,7 +8,7 @@ Robot::Robot() :
     nav2_client_(nullptr),
     odom_rcv(false),
     update_running(false),
-    activity_id_(nullptr),
+    cmd_exec_(nullptr),
     name(""),
     charger(""),
     map_name(""),
@@ -74,21 +74,8 @@ void Robot::setOdom2RmfTransform(std::vector<std::vector<double>> rmf_points,
     t_odom_rmf = t_rmf_odom.inverse();
 }
 
-void Robot::navigate(Destination desired_pose, CommandExecution cmd_exec)
+void Robot::navigate(Destination &desired_pose, CommandExecution &cmd_exec)
 {
-    {
-        std::lock_guard<std::mutex> lock(mute);
-        if (goal_handle_)
-        {
-            RCLCPP_WARN(node_->get_logger(), 
-                "Previous goal still active. Cancelling before sending new one for robot [%s].",
-                name.c_str());
-
-            nav2_client_->async_cancel_goal(goal_handle_);
-            goal_handle_.reset();
-        }
-    }
-
     tf2::Quaternion q_rmf;
     q_rmf.setRPY(0.0, 0.0, desired_pose.yaw());
 
@@ -109,7 +96,7 @@ void Robot::navigate(Destination desired_pose, CommandExecution cmd_exec)
     auto goal_options = rclcpp_action::Client<NavigateToPose>::SendGoalOptions();
 
     goal_options.goal_response_callback =
-    [this, cmd = cmd_exec](const NavGoalHandle::SharedPtr &handle_) -> void
+    [this, cmd_exec](const NavGoalHandle::SharedPtr &handle_) -> void
     {
         if (!handle_)
             RCLCPP_ERROR(node_->get_logger(),
@@ -120,19 +107,22 @@ void Robot::navigate(Destination desired_pose, CommandExecution cmd_exec)
             "Navigation goal was accepted by server on robot [%s]", name.c_str());
 
             goal_handle_ = handle_;
-            activity_id_ = cmd.identifier();
+            cmd_exec_ = std::make_shared<CommandExecution>(cmd_exec);
         }
     };
 
     goal_options.result_callback =
-    [this, cmd = &cmd_exec](const NavGoalHandle::WrappedResult &result) -> void
+    [this](const NavGoalHandle::WrappedResult &result) -> void
     {
         switch (result.code)
         {
             case rclcpp_action::ResultCode::SUCCEEDED:
-                RCLCPP_INFO(node_->get_logger(),
+            {
+                RCLCPP_WARN(node_->get_logger(),
                     "Goal succeeded for robot %s.", name.c_str());
+                cmd_exec_->finished();
                 break;
+            }
 
             case rclcpp_action::ResultCode::ABORTED:
                 RCLCPP_ERROR(node_->get_logger(),
@@ -147,12 +137,7 @@ void Robot::navigate(Destination desired_pose, CommandExecution cmd_exec)
             default:
                 RCLCPP_ERROR(node_->get_logger(), "Unknown result code.");
                 break;
-        }
-
-        activity_id_ = nullptr;
-        
-        cmd->finished();
-        goal_handle_.reset();
+        }        
     };
 
     nav2_client_->async_send_goal(goal, goal_options);
@@ -160,9 +145,9 @@ void Robot::navigate(Destination desired_pose, CommandExecution cmd_exec)
 
 void Robot::stop()
 {
+    std::lock_guard<std::mutex> lock(goal_handle_mute);
     if (goal_handle_)
     {
-        std::lock_guard<std::mutex> lock(mute);
         nav2_client_->async_cancel_goal(goal_handle_);
         goal_handle_.reset();
     }
@@ -170,7 +155,7 @@ void Robot::stop()
 
 RobotState Robot::getState()
 {
-    std::lock_guard<std::mutex> lock(mute);
+    std::lock_guard<std::mutex> lock(robot_state_mute);
     return *robot_state_;
 }
 
@@ -207,7 +192,7 @@ bool Robot::startOdometrySubscriber()
 void Robot::odometryCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
 {
     {
-        std::lock_guard<std::mutex> lock(mute);
+        // std::lock_guard<std::mutex> lock(robot_state_mute);
 
         tf2::Quaternion q_odom(msg->pose.pose.orientation.x,
             msg->pose.pose.orientation.y,
@@ -224,7 +209,7 @@ void Robot::odometryCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
 
         double roll, pitch, yaw;
         m.getRPY(roll, pitch, yaw);
-        
+
         robot_state_->set_position(Eigen::Vector3d({t_rmf_robot.getOrigin()[0],
                                                         t_rmf_robot.getOrigin()[1],
                                                         yaw}));
@@ -244,10 +229,15 @@ void Robot::robotUpdateThread()
 {
     while (update_running && rclcpp::ok())
     {
-        std::lock_guard<std::mutex> lock(mute);
+        std::lock_guard<std::mutex> lock(robot_state_mute);
         
         if (robot_handle_)
-            robot_handle_->update(*robot_state_, activity_id_);
+        {
+            if (cmd_exec_)
+                robot_handle_->update(*robot_state_, cmd_exec_->identifier());
+            else
+                robot_handle_->update(*robot_state_, nullptr);
+        }
         else
             RCLCPP_ERROR(node_->get_logger(), "Trying to use robot_handle_ while its null.");
         

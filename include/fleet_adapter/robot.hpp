@@ -27,22 +27,24 @@ namespace fleet_adapter
             rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
             rclcpp_action::Client<nav2_msgs::action::NavigateToPose>::SharedPtr nav2_client_;
 
-            bool odom_rcv;
             std::condition_variable odom_cv;
-            std::mutex odom_cv_mute;
+            std::atomic<bool> odom_rcv;
             
             tf2::Transform t_rmf_odom;
             tf2::Transform t_odom_rmf;
 
             std::thread update_thread;
             std::atomic<bool> update_running;
-            std::mutex mute;
+            
+            std::mutex odom_cv_mute;
+            std::mutex robot_state_mute;
+            std::mutex goal_handle_mute;
 
             std::string name;
             std::string charger;
             std::string map_name;
 
-            ConstActivityIdentifierPtr activity_id_;
+            std::shared_ptr<CommandExecution> cmd_exec_;
             EasyRobotUpdateHandlePtr robot_handle_;
             NavGoalHandle::SharedPtr goal_handle_;
             std::shared_ptr<RobotState> robot_state_;
@@ -75,8 +77,8 @@ namespace fleet_adapter
             * then sends it to the according navigation action server (nav2 for now), holding
             * the goal handle and the command identifier provided by the RMF.
             */
-            void navigate(Destination desired_pose,
-                CommandExecution cmd_exec);
+            void navigate(Destination &desired_pose,
+                CommandExecution &cmd_exec);
             void stop();
             
             RobotState getState();
