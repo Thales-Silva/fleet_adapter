@@ -10,11 +10,11 @@ The fleet adapter serves as the direct interface between RMF and the robot. When
 
 As in the figure, `FleetAdapter` has only one a member attribute which is `data_`of type `Data`. This member encapsulates all handles needed to manage the fleet: an adapter handle (`adapter_`), a fleet handle (`fleet_handle_`) and the robot handles stored in an array (`robots`).
 
-The architecture is centered around the `Adapter` class. An instance of this class is created, and the method `Adapter::add_easy_fleet()` is called to obtain a fleet handle used to register robots to the fleet.
+The architecture is centered around the `Adapter` class. An instance of this class is created, and the method `Adapter::add_easy_fleet` is called to obtain a fleet handle used to register robots to the fleet.
 
-Once a fleet is registered, robots are added through the custom method `FleetAdapter::addRobots()`. This method prepares all necessary objects to call `EasyFullControl::add_robot()`, which returns a `EasyRobotUpdateHandle` object. This handle is then stored internally in the `FleetAdapter` class under the `data_`.
+Once a fleet is registered, robots are added through the custom method `FleetAdapter::addRobots`. This method prepares all necessary objects to call `EasyFullControl::add_robot`, which returns an `EasyRobotUpdateHandle` object. This handle is then stored internally in the `FleetAdapter` class under the `data_`.
 
-To call `EasyFullControl::add_robot()`, each robot must have a `RobotCallbacks` object. This object provides callbacks that connect to the internal methods of the `Robot` class. These internal methods implement the navigation and task execution logic.
+To call `EasyFullControl::add_robot`, each robot must have a `RobotCallbacks` object. This object provides callbacks that connect to the internal methods of the `Robot` class. These internal methods implement the navigation and task execution logic.
 
 During task execution, the robot must continuously call `robot_handle_->update()` with a `RobotState` and `ActivityIdentifier`, so RMF can monitor the task's progress.
 
@@ -24,11 +24,12 @@ During task execution, the robot must continuously call `robot_handle_->update()
 
 Suppose the robot receives a navigation task to a target position `(X, Y)`. The following steps occur:
 
-1. The callback `RobotCallbacks::NavigationRequest()` is invoked.
-2. It calls `Robot::navigate()`, passing the destination and an execution handle.
-3. Inside `Robot::navigate()`, a navigation goal is sent to the robot's action server.
-4. If the action is accepted, a dedicated thread is started to periodically update the robot's state.
-5. When the navigation completes (successfully, aborted, or canceled), the thread stops and the robot waits for the next task.
+1. The callback `RobotCallbacks::NavigationRequest` is invoked.
+2. It calls `Robot::navigate`, passing the destination and an execution handle.
+3. Inside `Robot::navigate`, a navigation goal is sent to the robot's action server.
+<!-- 4. If the action is accepted, a dedicated thread is started to periodically update the robot's state. -->
+4. As the robot moves around, the `update` thread constatly informs the robot pose to the RMF.
+5. When the navigation completes (successfully, aborted, or canceled), the application will trigger the `EasyFullControl::CommandExecution::finished` method, which informs the RMF that the command was finished.
 
 ### 1.2. The `Robot` class
 
@@ -37,7 +38,9 @@ This class is responsible for interfacing with the actual robot hardware/softwar
 The `Robot` class encapsulates all robot-specific logic, including:
 - Subscriptions to ROS topics;
 - Client services;
-- Action servers provided by the nav2 stack.
+- Action servers provided by the nav2 stack;
+- Transformation between coordinate systems;
+- RMF pose update.
 
 ## 2. Installation
 
